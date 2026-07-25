@@ -63,39 +63,4 @@ LRC lines must contain timestamps:
 | `Esc` | Exit |
 | `Ctrl+C` | Exit |
 
-## Files
 
-| File | Purpose |
-| --- | --- |
-| `run.sh` | Terminal player and lyric renderer |
-| `play.sh` | Remote download-and-play launcher |
-| `1.lrc` | Timestamped lyrics |
-| `1.mp3` | Audio file |
-
-## Free hosting
-
-GitHub can serve these files directly from a public repository. After changing
-files:
-
-```bash
-git add README.md play.sh run.sh 1.mp3 1.lrc
-git commit -m "docs: add project readme"
-git push origin main
-```
-
-Remote launcher URL:
-
-```text
-https://raw.githubusercontent.com/alsaadii98/letithappen-sh/main/play.sh
-```
-
-## Credits
-
-- Project: [@alsaadii98](https://github.com/alsaadii98)
-- Dancer artwork: PN,
-  [ASCII Art Archive](https://asciiart.website/art/4020)
-
-## Music rights
-
-Only publish audio and lyrics you own or have permission to distribute.
-Project attribution does not grant rights to third-party music or lyrics.
