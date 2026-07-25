@@ -84,6 +84,10 @@ cleanup() {
     kill "$PLAYER_PID" 2>/dev/null || true
   fi
 
+  if [[ -n "${KEY_PID:-}" ]]; then
+    kill "$KEY_PID" 2>/dev/null || true
+  fi
+
   if [[ -n "${TTY_STATE:-}" ]]; then
     stty "$TTY_STATE" < /dev/tty 2>/dev/null || true
   fi
@@ -99,34 +103,13 @@ get_time_ms() {
 
 sleep_ms() {
   local milliseconds="$1"
-  local end_time
-  local now
-  local remaining
-  local key
+  local slice
 
-  end_time=$(($(get_time_ms) + milliseconds))
-  while true; do
-    now="$(get_time_ms)"
-    remaining=$((end_time - now))
-    (( remaining <= 0 )) && break
-
-    key="$(perl -MTime::HiRes=sleep -e '
-      my $timeout = $ARGV[0] / 1000;
-      if (!open(my $tty, "<", "/dev/tty")) {
-        sleep($timeout);
-        exit;
-      }
-      my $readable = "";
-      vec($readable, fileno($tty), 1) = 1;
-      if (select($readable, undef, undef, $timeout) > 0) {
-        sysread($tty, my $character, 1);
-        print $character;
-      }
-    ' "$remaining")"
-
-    if [[ "$key" == $'\e' || "$key" == "q" || "$key" == "Q" ]]; then
-      exit 0
-    fi
+  while (( milliseconds > 0 )); do
+    slice=$milliseconds
+    (( slice > 75 )) && slice=75
+    perl -MTime::HiRes=sleep -e "sleep($slice / 1000)"
+    milliseconds=$((milliseconds - slice))
   done
 }
 
@@ -354,94 +337,78 @@ draw_dancer() {
   local top
   local width
   local line
+  local dancer_width=0
+  local padding
+  local shift
+  local frame_index
+  local row_step
+  local row
   local frame_buffer=""
-  local dancer_lines=()
-
-  case $((frame % 6)) in
-    0)
-      dancer_lines=(
-        '  ♪      .---.      ♫  '
-        '        / o o \        '
-        '        |  ^  |        '
-        '        \ \_/ /        '
-        '     \___/|_|\___/     '
-        '          |            '
-        '         / \           '
-        '        /   \          '
-      )
-      ;;
-    1)
-      dancer_lines=(
-        '           .---.     ♪  '
-        '          / o o \   /   '
-        '          |  ^  |  /    '
-        '          \  -  /_/     '
-        '      _____/|_|         '
-        '           /|           '
-        '          /  \          '
-        '         /    \__       '
-      )
-      ;;
-    2)
-      dancer_lines=(
-        '    ♫   .---.           '
-        '       / ^ ^ \          '
-        '       |  o  |          '
-        '       \ \_/ /          '
-        '     ___/|_|\___        '
-        '    /    |     \        '
-        '        / \             '
-        '      _/   \_           '
-      )
-      ;;
-    3)
-      dancer_lines=(
-        '  ♪     .---.           '
-        '   \   / o o \          '
-        '    \  |  ^  |          '
-        '     \_\  -  /          '
-        '         |_|\_____      '
-        '          |\           '
-        '         /  \          '
-        '      __/    \         '
-      )
-      ;;
-    4)
-      dancer_lines=(
-        '    ♫    .---.    ♪    '
-        '        / O O \        '
-        '        |  ^  |        '
-        '        \ \_/ /        '
-        '   _______/|\_______   '
-        '          /|\          '
-        '         / | \         '
-        '        /     \        '
-      )
-      ;;
-    *)
-      dancer_lines=(
-        ' ♪       .---.       ♫ '
-        '   \    / ^ ^ \    /   '
-        '    \   |  o  |   /    '
-        '     \__\ \_/ /__/     '
-        '         \|_|/         '
-        '          |            '
-        '        _/ \_          '
-        '       /     \         '
-      )
-      ;;
-  esac
+  local dancer_lines=(
+    "   _                             .-."
+    "  / )  .-.    ___          __   (   )"
+    " ( (  (   ) .'___)        (__'-._) ("
+    "  \\ '._) (,'.'               '.     '-."
+    "   '.      /  \"\\               '    -. '."
+    "     )    /   \\ \\   .-.   ,'.   )  (  ',_)    _"
+    "   .'    (     \\ \\ (   \\ . .' .'    )    .-. ( \\"
+    "  (  .''. '.    \\ \\|  .' .' ,',--, /    (   ) ) )"
+    "   \\ \\   ', :    \\    .-'  ( (  ( (     _) (,' /"
+    "    \\ \\   : :    )  / _     ' .  \\ \\  ,'      /"
+    "  ,' ,'   : ;   /  /,' '.   /.'  / / ( (\\    ("
+    "  '.'      \"   (    .-'. \\       ''   \\_)\\    \\"
+    "                \\  |    \\ \\__             )    )"
+    "              ___\\ |     \\___;           /  , /"
+    "             /  ___)                    (  ( ("
+    "            '.'                         ) ;) ;"
+    "                                        (*/(*/"
+  )
 
   height="$(terminal_height)"
   width="$(terminal_width)"
-  top=$(((height - ${#dancer_lines[@]} - 2) / 2))
-  if (( frame % 6 == 5 )); then
-    top=$((top - 1))
-  fi
+  row_step=$(((${#dancer_lines[@]} + height - 4) / (height - 3)))
+  (( row_step < 1 )) && row_step=1
+  top=$(((height - ((${#dancer_lines[@]} + row_step - 1) / row_step) - 2) / 2))
   (( top < 1 )) && top=1
 
   for line in "${dancer_lines[@]}"; do
-    printf -v line '%*s%s' "$(((width - ${#line}) / 2))" "" "$line"
+    (( ${#line} > dancer_width )) && dancer_width=${#line}
+  done
+  padding=$(((width - dancer_width) / 2))
+  (( padding < 0 )) && padding=0
+  frame_index=$((frame % 8))
+
+  for ((row = 0; row < ${#dancer_lines[@]}; row += row_step)); do
+    line="${dancer_lines[$row]}"
+
+    if (( row <= 4 )); then
+      case "$frame_index" in
+        1|2) shift=-1 ;;
+        5|6) shift=1 ;;
+        *) shift=0 ;;
+      esac
+    elif (( row <= 11 )); then
+      case "$frame_index" in
+        2|3) shift=-1 ;;
+        6|7) shift=1 ;;
+        *) shift=0 ;;
+      esac
+    else
+      case "$frame_index" in
+        1|4) shift=1 ;;
+        3|6) shift=-1 ;;
+        *) shift=0 ;;
+      esac
+    fi
+
+    if (( shift > 0 )); then
+      line=" $line"
+    elif (( shift < 0 )); then
+      line="${line:1}"
+    fi
+
+    printf -v line '%*s%s' "$padding" "" "$line"
+    line="${line:0:width}"
     printf -v line '%-*s' "$width" "$line"
     frame_buffer+=$'\033['"$top"$';1H'"$line"
     top=$((top + 1))
@@ -457,7 +424,7 @@ animate_instrumental() {
   local delay_ms
 
   printf '\033[H\033[J'
-  draw_footer "♫ Instrumental — keep dancing ♫"
+  draw_footer "♫ Instrumental  •  Dancer: PN / asciiart.website/art/4020"
   while true; do
     remaining_ms=$(((START_TIME + lyric_end_ms) - $(get_time_ms)))
     if (( remaining_ms <= 0 )); then
@@ -466,7 +433,7 @@ animate_instrumental() {
 
     draw_dancer "$frame"
     frame=$((frame + 1))
-    delay_ms=160
+    delay_ms=75
     if (( remaining_ms < delay_ms )); then
       delay_ms=$remaining_ms
     fi
@@ -534,6 +501,19 @@ if [[ -n "$TTY_STATE" ]]; then
 fi
 
 printf '\033[?1049h\033[?25l' # Enter alternate screen and hide cursor
+
+MAIN_PID=$$
+perl -e '
+  my $parent = $ARGV[0];
+  open(my $tty, "<", "/dev/tty") or exit;
+  while (sysread($tty, my $key, 1)) {
+    if ($key eq "\e" || $key eq "q" || $key eq "Q") {
+      kill "TERM", $parent;
+      exit;
+    }
+  }
+' "$MAIN_PID" &
+KEY_PID=$!
 
 mpv \
   --no-video \
