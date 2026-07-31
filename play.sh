@@ -9,8 +9,7 @@ SONG="$TEMP_DIR/1.mp3"
 LYRICS="$TEMP_DIR/1.lrc"
 
 cleanup() {
-  rm -f "$RUNNER" "$SONG" "$LYRICS"
-  rmdir "$TEMP_DIR" 2>/dev/null || true
+  rm -rf "$TEMP_DIR"
 }
 
 trap cleanup EXIT INT TERM

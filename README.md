@@ -1,7 +1,16 @@
 # Let It Happen — Terminal Song
 
-Play synchronized LRC lyrics as animated terminal art. Includes responsive
-block lettering, instrumental ASCII animation, and keyboard controls.
+Play synchronized LRC lyrics as animated terminal art: half-block big
+lettering with a truecolor gradient over a live radial spectrum bloom, an
+audio-reactive bar spectrum, and a three-line lyric stack.
+
+The bloom wraps the track's 16 frequency bands around a circle — bass pointing
+down, treble up, mirrored left to right — so its shape is the music. Kick
+drums push rings outward and flare the lettering. It is generated per frame by
+a persistent `awk` process rather than being fixed ASCII art.
+
+Timing comes from mpv's own audio clock over its JSON IPC socket, so the
+lyrics stay locked to the music through startup latency, pausing and seeking.
 
 ## Quick start
 
@@ -17,10 +26,15 @@ files are removed after playback.
 
 ## Requirements
 
-- Bash
+- Bash (3.2 or newer — the `/bin/bash` shipped with macOS works)
 - `curl`
 - [`mpv`](https://mpv.io/)
 - Perl
+- `ffmpeg` (optional — drives the bloom and the bars; analysis runs in the
+  background while playback starts, so there is no wait before the music)
+
+Without `ffmpeg` everything still runs; the visuals just fall back to a
+starfield with no spectrum reacting behind them.
 
 Install `mpv`:
 
@@ -59,8 +73,14 @@ LRC lines must contain timestamps:
 
 | Key | Action |
 | --- | --- |
+| `Space` | Pause / resume |
+| `←` / `→` | Seek 5 seconds |
 | `Q` | Exit |
 | `Esc` | Exit |
 | `Ctrl+C` | Exit |
+
+Enhanced-LRC per-word tags (`<00:12.34>`) are accepted and stripped for
+display. Truecolor is used when `$COLORTERM` advertises it, with a 256-color
+fallback.
 
 
