@@ -138,15 +138,9 @@ if [[ ! -f "$LYRICS_FILE" ]]; then
   exit 1
 fi
 
-if ! command -v mpv >/dev/null 2>&1; then
-  echo "mpv is required."
-  echo "macOS: brew install mpv"
-  echo "Ubuntu: sudo apt install mpv"
-  exit 1
-fi
-
-if ! command -v perl >/dev/null 2>&1; then
-  echo "perl is required."
+# Same prompt the curl | bash path gets: offer to install anything missing,
+# then carry straight on into playback.
+if ! ensure_dependencies; then
   exit 1
 fi
 
@@ -184,7 +178,7 @@ cleanup() {
     kill "$EFFECTS_PID" 2>/dev/null || true
   fi
   if [[ -n "${TTY_STATE:-}" ]]; then
-    stty "$TTY_STATE" < /dev/tty 2>/dev/null || true
+    { stty "$TTY_STATE" < /dev/tty; } 2>/dev/null || true
   fi
 
   rm -rf "$RUNTIME_DIR" 2>/dev/null || true
@@ -523,7 +517,10 @@ BEGIN {
   f["("]="00010/00100/00100/00100/00010"; f[")"]="01000/00100/00100/00100/01000"
   f[" "]="00000/00000/00000/00000/00000"
 
-  scale_count = split("8 6 5 4 3 2 1", scale_options, " ")
+  # Capped at 4. Without a ceiling the picker just takes the largest size
+  # that fits, which on a 200-column terminal means one lyric swallowing the
+  # whole screen.
+  scale_count = split("4 3 2 1", scale_options, " ")
 }
 
 {
@@ -807,7 +804,7 @@ RESIZE_PENDING=0
 
 update_terminal_size() {
   local tty_size
-  tty_size="$(stty size < /dev/tty 2>/dev/null || true)"
+  tty_size="$( { stty size < /dev/tty; } 2>/dev/null || true )"
   if [[ "$tty_size" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
     TERM_HEIGHT=${tty_size%% *}
     TERM_WIDTH=${tty_size##* }
@@ -822,9 +819,9 @@ on_resize() { RESIZE_PENDING=1; }
 update_terminal_size
 trap on_resize WINCH
 
-TTY_STATE="$(stty -g < /dev/tty 2>/dev/null || true)"
+TTY_STATE="$( { stty -g < /dev/tty; } 2>/dev/null || true )"
 if [[ -n "$TTY_STATE" ]]; then
-  stty -echo -icanon min 1 time 0 < /dev/tty
+  { stty -echo -icanon min 1 time 0 < /dev/tty; } 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------
@@ -878,18 +875,24 @@ set_escape() {
 
 PALETTE=()
 PALETTE_BRIGHT=()
+PALETTE_BARS=()
 
 build_palette() {
   local hue index
-  PALETTE=(); PALETTE_BRIGHT=()
+  PALETTE=(); PALETTE_BRIGHT=(); PALETTE_BARS=()
   for ((hue = 0; hue < HUE_STEPS; hue++)); do
     for ((index = 0; index < CHUNKS; index++)); do
-      hsv_to_rgb $(( hue * 10 + index * 6 )) 78 92
+      # index * 2, not * 6: a lyric should read as one colour that drifts,
+      # not as a rainbow sweeping through every letter.
+      hsv_to_rgb $(( hue * 10 + index * 2 )) 70 90
       set_escape "$R" "$G" "$B"
       PALETTE+=("$ESC_OUT")
-      hsv_to_rgb $(( hue * 10 + index * 6 )) 26 100
+      hsv_to_rgb $(( hue * 10 + index * 2 )) 40 100
       set_escape "$R" "$G" "$B"
       PALETTE_BRIGHT+=("$ESC_OUT")
+      hsv_to_rgb $(( hue * 10 + index * 3 )) 55 58
+      set_escape "$R" "$G" "$B"
+      PALETTE_BARS+=("$ESC_OUT")
     done
   done
 }
@@ -936,10 +939,10 @@ build_tables() {
   done
   BLOCK_STRIDE=$(( maximum_band + 1 ))
 
-  if (( SPECTRUM_COLUMNS > 0 && TERM_HEIGHT >= 24 )); then
-    BAR_ROWS=5
-  elif (( SPECTRUM_COLUMNS > 0 && TERM_HEIGHT >= 18 )); then
+  if (( SPECTRUM_COLUMNS > 0 && TERM_HEIGHT >= 22 )); then
     BAR_ROWS=3
+  elif (( SPECTRUM_COLUMNS > 0 && TERM_HEIGHT >= 16 )); then
+    BAR_ROWS=2
   else
     BAR_ROWS=0
   fi
@@ -966,6 +969,13 @@ render_all_lyrics() {
   (( CONTENT_HEIGHT < 5 )) && CONTENT_HEIGHT=5
   ART_AREA_HEIGHT=$(( CONTENT_HEIGHT - 4 ))
   (( ART_AREA_HEIGHT < 3 )) && ART_AREA_HEIGHT=3
+
+  # Hold the lyric block to roughly the middle half of the screen. The art
+  # area is what it is *allowed* to use; this is what it should actually take,
+  # so there is breathing room above and below instead of edge-to-edge type.
+  local art_cap=$(( TERM_HEIGHT * 46 / 100 ))
+  (( art_cap < 3 )) && art_cap=3
+  (( ART_AREA_HEIGHT > art_cap )) && ART_AREA_HEIGHT=$art_cap
 
   awk -v W="$TERM_WIDTH" -v H="$ART_AREA_HEIGHT" -f "$RENDER_FILE" \
     "$LINES_FILE" > "$ART_FILE"
@@ -1151,7 +1161,7 @@ emit_spectrum() { # top row
       run=$column_width
       (( band < remainder )) && run=$(( run + 1 ))
       palette_index=$(( hue_base * CHUNKS + band ))
-      line+="${PALETTE[$palette_index]}${BLOCK_RUNS[$(( height * BLOCK_STRIDE + run ))]}"
+      line+="${PALETTE_BARS[$palette_index]}${BLOCK_RUNS[$(( height * BLOCK_STRIDE + run ))]}"
     done
     emit_row $(( top + row )) "$line$RESET"
   done
@@ -1207,7 +1217,7 @@ emit_art() { # lyric index, reveal chunks, sweep chunk, hue base
     for ((chunk_index = 0; chunk_index < count; chunk_index++)); do
       (( chunk_index > reveal )) && break
       palette_index=$(( hue_base * CHUNKS + chunk_index ))
-      if (( BEAT )) || (( chunk_index == sweep )); then
+      if (( chunk_index == sweep )); then
         line+="${PALETTE_BRIGHT[$palette_index]}"
       else
         line+="${PALETTE[$palette_index]}"
@@ -1353,7 +1363,9 @@ while true; do
     sweep=$(( elapsed_in_line * CHUNKS / line_duration ))
     (( sweep >= CHUNKS )) && sweep=-1
 
-    emit_visualizer || clear_region 1 "$CONTENT_HEIGHT"
+    # No bloom behind a lyric: it is the same spectrum the bars already
+    # show, and its blobs collide with the letters and the dim neighbours.
+    clear_region 1 "$CONTENT_HEIGHT"
     if emit_art "$current_index" "$reveal" "$sweep" "$hue"; then
       emit_neighbours $(( current_index - 1 )) $(( current_index + 1 ))
     fi
