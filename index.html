@@ -60,12 +60,30 @@ body {
   /* Dim the middle so the card stays legible, and fall to zero at the frame
      so expanding rings dissolve instead of stacking into a hard band along
      the bottom and side edges. */
-  -webkit-mask-image: radial-gradient(ellipse 68% 60% at 50% 46%,
-            rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.62) 38%,
-            rgba(0,0,0,0.5) 68%, rgba(0,0,0,0) 100%);
-          mask-image: radial-gradient(ellipse 68% 60% at 50% 46%,
-            rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.62) 38%,
-            rgba(0,0,0,0.5) 68%, rgba(0,0,0,0) 100%);
+  -webkit-mask-image: radial-gradient(ellipse 66% 54% at 50% 42%,
+            rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.62) 36%,
+            rgba(0,0,0,0.46) 64%, rgba(0,0,0,0) 100%);
+          mask-image: radial-gradient(ellipse 66% 54% at 50% 42%,
+            rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.62) 36%,
+            rgba(0,0,0,0.46) 64%, rgba(0,0,0,0) 100%);
+}
+
+/* The bass lobe points down, so the densest part of the bloom lands below
+   the card where no content covers it. This seals the bottom of the page so
+   it dissolves into the background instead of leaving a murky band. Sits
+   above the canvas but below the content, so it never dims the text. */
+.floor {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 42vh;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(to bottom,
+              rgba(6, 7, 11, 0) 0%,
+              rgba(6, 7, 11, 0.72) 46%,
+              var(--bg) 82%);
 }
 
 /* CRT dressing: scanlines, grain, vignette. All non-interactive. */
@@ -334,6 +352,7 @@ body {
 <body>
 
 <canvas id="bloom" aria-hidden="true"></canvas>
+<div class="floor" aria-hidden="true"></div>
 <div class="vignette" aria-hidden="true"></div>
 <div class="crt" aria-hidden="true"></div>
 <div class="grain" aria-hidden="true"></div>
