@@ -9,6 +9,117 @@
 
 set -uo pipefail
 
+# ---------------------------------------------------------------------------
+# Dependencies
+#
+# Offer to install what is missing instead of just failing. play.sh sources
+# this file with TERMINAL_SONG_LIB=1 to reuse ensure_dependencies before it
+# downloads the audio, so both entry points prompt identically.
+#
+# Note the prompt reads from /dev/tty, not stdin: under `curl … | bash` stdin
+# is the pipe carrying the script, and reading it would eat the script.
+# ---------------------------------------------------------------------------
+
+package_installer() {
+  if command -v brew    >/dev/null 2>&1; then echo "brew install";              return 0; fi
+  if command -v apt-get >/dev/null 2>&1; then echo "sudo apt-get install -y";   return 0; fi
+  if command -v dnf     >/dev/null 2>&1; then echo "sudo dnf install -y";       return 0; fi
+  if command -v pacman  >/dev/null 2>&1; then echo "sudo pacman -S --noconfirm"; return 0; fi
+  if command -v zypper  >/dev/null 2>&1; then echo "sudo zypper install -y";    return 0; fi
+  if command -v apk     >/dev/null 2>&1; then echo "sudo apk add";              return 0; fi
+  if command -v port    >/dev/null 2>&1; then echo "sudo port install";         return 0; fi
+  return 1
+}
+
+ensure_dependencies() {
+  local required="" optional="" wanted="" installer="" reply=""
+
+  command -v mpv    >/dev/null 2>&1 || required="$required mpv"
+  command -v perl   >/dev/null 2>&1 || required="$required perl"
+  command -v ffmpeg >/dev/null 2>&1 || optional="$optional ffmpeg"
+
+  if [[ -z "$required$optional" ]]; then
+    return 0
+  fi
+
+  wanted="$required$optional"
+  wanted="${wanted# }"
+
+  echo
+  if [[ -n "$required" ]]; then
+    echo "Required, not installed:${required}"
+  fi
+  if [[ -n "$optional" ]]; then
+    echo "Optional, not installed:${optional}  (spectrum bloom and bars)"
+  fi
+
+  installer="$(package_installer)" || installer=""
+
+  if [[ -z "$installer" ]]; then
+    echo
+    echo "No supported package manager found. Install manually, then re-run:"
+    echo "  macOS:         brew install $wanted"
+    echo "  Debian/Ubuntu: sudo apt-get install $wanted"
+    if [[ -n "$required" ]]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  # Non-interactive (cron, CI, no controlling terminal): never install
+  # unattended, just say what to run. Test by opening /dev/tty rather than
+  # with -r, which reports readable even where the open then fails.
+  if ! { : < /dev/tty; } 2>/dev/null; then
+    echo
+    echo "Run: $installer $wanted"
+    if [[ -n "$required" ]]; then
+      return 1
+    fi
+    return 0
+  fi
+
+  echo
+  echo "This will run:  $installer $wanted"
+  printf 'Install now for the full experience? [y/N] '
+  read -r reply < /dev/tty || reply=""
+  echo
+
+  case "$reply" in
+    [yY] | [yY][eE][sS])
+      # Intentionally unquoted: both parts carry multiple words.
+      if ! $installer $wanted; then
+        echo "Install failed. Run it yourself: $installer $wanted"
+        if [[ -n "$required" ]]; then
+          return 1
+        fi
+        return 0
+      fi
+      ;;
+    *)
+      if [[ -n "$required" ]]; then
+        echo "Cannot run without:${required}"
+        echo "Install with: $installer${required}"
+        return 1
+      fi
+      echo "Continuing without:${optional}"
+      return 0
+      ;;
+  esac
+
+  if [[ -n "$required" ]]; then
+    if ! command -v mpv >/dev/null 2>&1 || ! command -v perl >/dev/null 2>&1; then
+      echo "Still missing after install. Check the output above."
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# Sourced by play.sh purely for the helpers above.
+if [[ "${TERMINAL_SONG_LIB:-}" == "1" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+
 SONG_FILE="${1:-}"
 LYRICS_FILE="${2:-}"
 

@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>let it happen — lyrics as terminal art</title>
+<meta name="description" content="Play synchronized LRC lyrics as animated terminal art. One curl command, an mpv-locked audio clock, and a radial spectrum bloom rendered in text.">
+<meta name="color-scheme" content="dark">
+<meta property="og:title" content="let it happen — lyrics as terminal art">
+<meta property="og:description" content="Synchronized lyrics as animated terminal art. One curl command.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://letithappen.alsaadii98.com/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%99%AA%3C/text%3E%3C/svg%3E">
+<style>
+/* ------------------------------------------------------------------ *
+ * The page runs the same renderer as the program it advertises: the
+ * wordmark is drawn with the exact 5x5 bitmap font from run.sh, packed
+ * into half-blocks, and the background is the radial spectrum bloom
+ * ported from effects.awk and driven by a synthetic beat.
+ * ------------------------------------------------------------------ */
+
+:root {
+  --bg:      #06070b;
+  --bg-lift: #0b0d13;
+  --ink:     #ece7dd;
+  --dim:     #7d7869;
+  --faint:   #46433c;
+  --amber:   #ffb454;
+  --cyan:    #6fd9e0;
+  --rule:    rgba(236, 231, 221, 0.13);
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "DejaVu Sans Mono", "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* --- background bloom ------------------------------------------------ */
+
+#bloom {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  opacity: 0.62;
+  /* Dim the middle so the card stays legible, and fall to zero at the frame
+     so expanding rings dissolve instead of stacking into a hard band along
+     the bottom and side edges. */
+  -webkit-mask-image: radial-gradient(ellipse 68% 60% at 50% 46%,
+            rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.62) 38%,
+            rgba(0,0,0,0.5) 68%, rgba(0,0,0,0) 100%);
+          mask-image: radial-gradient(ellipse 68% 60% at 50% 46%,
+            rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.62) 38%,
+            rgba(0,0,0,0.5) 68%, rgba(0,0,0,0) 100%);
+}
+
+/* CRT dressing: scanlines, grain, vignette. All non-interactive. */
+.crt, .grain, .vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.crt {
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0)   0px,
+    rgba(0, 0, 0, 0)   2px,
+    rgba(0, 0, 0, 0.20) 3px,
+    rgba(0, 0, 0, 0.20) 4px);
+  mix-blend-mode: multiply;
+  opacity: 0.55;
+}
+
+.grain {
+  opacity: 0.16;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
+.vignette {
+  background: radial-gradient(ellipse 78% 68% at 50% 45%,
+              transparent 40%, rgba(3, 4, 7, 0.72) 100%);
+}
+
+/* --- layout ---------------------------------------------------------- */
+
+.stage {
+  position: relative;
+  z-index: 1;
+  max-width: 96ch;
+  margin: 0 auto;
+  padding: clamp(2.2rem, 7vh, 5rem) clamp(1rem, 4vw, 2.5rem) 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(1.5rem, 4vh, 2.6rem);
+}
+
+/* --- wordmark -------------------------------------------------------- */
+
+.mark {
+  margin: 0;
+  line-height: 1.0;
+  letter-spacing: 0;
+  white-space: pre;
+  text-align: center;
+  font-family: var(--mono);
+  filter: drop-shadow(0 0 22px rgba(255, 180, 84, 0.14));
+}
+
+/* Chunks fade in left to right, the same wipe the program uses when a
+   lyric line lands. */
+.mark i {
+  font-style: normal;
+  opacity: 0;
+  animation: wipe 0.5s ease-out forwards;
+}
+
+@keyframes wipe { to { opacity: 1; } }
+
+.tagline {
+  margin: 0;
+  text-align: center;
+  color: var(--dim);
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  animation: rise 0.7s 0.85s ease-out forwards;
+}
+
+.tagline b { color: var(--ink); font-weight: 400; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* --- terminal card --------------------------------------------------- */
+
+.term {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: rgba(8, 10, 15, 0.82);
+  backdrop-filter: blur(9px);
+  -webkit-backdrop-filter: blur(9px);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 26px 70px -30px rgba(0, 0, 0, 0.95),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  overflow: hidden;
+  opacity: 0;
+  animation: rise 0.7s 1.0s ease-out forwards;
+}
+
+.term__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid var(--rule);
+  background: linear-gradient(rgba(255,255,255,0.035), rgba(255,255,255,0));
+  color: var(--faint);
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.term__bar span:last-child { color: var(--faint); }
+
+.term__body { padding: 1.15rem 0.9rem 1.05rem; }
+
+/* --- the command ----------------------------------------------------- */
+
+.cmd {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px dashed rgba(255, 180, 84, 0.28);
+  border-radius: 6px;
+  background: rgba(255, 180, 84, 0.045);
+}
+
+.cmd__prompt {
+  color: var(--amber);
+  user-select: none;
+  flex: none;
+  text-shadow: 0 0 12px rgba(255, 180, 84, 0.5);
+}
+
+.cmd__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+.cmd__text u {
+  text-decoration: none;
+  color: var(--amber);
+}
+
+.copy {
+  flex: none;
+  align-self: center;
+  font: inherit;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 0.28rem 0.62rem;
+  cursor: pointer;
+  transition: color 0.18s, border-color 0.18s, background 0.18s;
+}
+
+.copy:hover,
+.copy:focus-visible {
+  color: var(--bg);
+  background: var(--amber);
+  border-color: var(--amber);
+  outline: none;
+}
+
+.copy[data-done="1"] {
+  color: var(--bg);
+  background: var(--cyan);
+  border-color: var(--cyan);
+}
+
+.warn {
+  margin: 0.85rem 0 0;
+  font-size: 0.83rem;
+  color: var(--dim);
+}
+
+.warn a { color: var(--cyan); text-underline-offset: 3px; }
+
+/* --- spec rows ------------------------------------------------------- */
+
+.specs {
+  margin: 1.15rem 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.28rem 1.1rem;
+  font-size: 0.86rem;
+}
+
+.specs dt {
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 0.74rem;
+  padding-top: 0.18rem;
+}
+
+.specs dd { margin: 0; color: var(--dim); }
+.specs dd b { color: var(--ink); font-weight: 400; }
+.specs code {
+  color: var(--ink);
+  background: rgba(255,255,255,0.055);
+  padding: 0.02em 0.34em;
+  border-radius: 3px;
+}
+
+.term__foot {
+  padding: 0.55rem 0.9rem;
+  border-top: 1px solid var(--rule);
+  color: var(--faint);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+/* --- page footer ----------------------------------------------------- */
+
+.colophon {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem 1.4rem;
+  color: var(--faint);
+  font-size: 0.8rem;
+  opacity: 0;
+  animation: rise 0.7s 1.2s ease-out forwards;
+}
+
+.colophon a { color: var(--dim); text-underline-offset: 3px; }
+.colophon a:hover { color: var(--cyan); }
+
+.sr {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  body { font-size: 14px; }
+  .cmd { flex-wrap: wrap; }
+  .copy { align-self: stretch; width: 100%; }
+  .specs { grid-template-columns: 1fr; gap: 0.1rem; }
+  .specs dt { padding-top: 0.5rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mark i, .tagline, .term, .colophon {
+    animation-duration: 0.01ms;
+    animation-delay: 0ms;
+    opacity: 1;
+  }
+}
+</style>
+</head>
+<body>
+
+<canvas id="bloom" aria-hidden="true"></canvas>
+<div class="vignette" aria-hidden="true"></div>
+<div class="crt" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+
+<main class="stage">
+
+  <h1 class="sr">let it happen — synchronized lyrics as animated terminal art</h1>
+  <pre class="mark" id="mark" aria-hidden="true"></pre>
+
+
+  <section class="term" aria-label="Run it">
+    <div class="term__bar">
+      <span>♪ letithappen.sh</span>
+      <span>bash — 120×40</span>
+    </div>
+
+    <div class="term__body">
+      <div class="cmd">
+        <span class="cmd__prompt" aria-hidden="true">$</span>
+        <code class="cmd__text" id="cmd-text">curl -fsSL <u>https://letithappen.alsaadii98.com/play.sh</u> | bash</code>
+        <button class="copy" id="copy" type="button">copy</button>
+      </div>
+
+      <p class="warn">
+        Piping a remote script into your shell runs whatever it contains.
+        <a href="/play.sh">Read play.sh</a> first — it's 36 lines.
+      </p>
+
+      <dl class="specs">
+        <dt>needs</dt>
+        <dd><b>mpv</b> and <b>perl</b> · <code>brew install mpv</code></dd>
+
+        <dt>optional</dt>
+        <dd><b>ffmpeg</b> — drives the bloom and the bars</dd>
+
+        <dt>shell</dt>
+        <dd>bash 3.2+, so the <code>/bin/bash</code> on macOS is fine</dd>
+
+      </dl>
+    </div>
+
+    <div class="term__foot">Space: pause &nbsp;•&nbsp; ←/→: seek 5s &nbsp;•&nbsp; Esc/Q: exit</div>
+  </section>
+
+  <footer class="colophon">
+    <a href="https://github.com/alsaadii98/letithappen-sh">source on github</a>
+    <span>demo track: Let It Happen — Tame Impala</span>
+    <a href="https://github.com/alsaadii98">@alsaadii98</a>
+  </footer>
+
+</main>
+
+<div class="sr" role="status" id="status"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ================================================================== *
+   * The 5x5 bitmap font, lifted verbatim from run.sh.
+   * ================================================================== */
+
+  var FONT = {
+    A:'01110/10001/11111/10001/10001', B:'11110/10001/11110/10001/11110',
+    C:'01111/10000/10000/10000/01111', D:'11110/10001/10001/10001/11110',
+    E:'11111/10000/11110/10000/11111', F:'11111/10000/11110/10000/10000',
+    G:'01111/10000/10111/10001/01111', H:'10001/10001/11111/10001/10001',
+    I:'11111/00100/00100/00100/11111', J:'00001/00001/00001/10001/01110',
+    K:'10001/10010/11100/10010/10001', L:'10000/10000/10000/10000/11111',
+    M:'10001/11011/10101/10001/10001', N:'10001/11001/10101/10011/10001',
+    O:'01110/10001/10001/10001/01110', P:'11110/10001/11110/10000/10000',
+    Q:'01110/10001/10101/10010/01101', R:'11110/10001/11110/10010/10001',
+    S:'01111/10000/01110/00001/11110', T:'11111/00100/00100/00100/00100',
+    U:'10001/10001/10001/10001/01110', V:'10001/10001/10001/01010/00100',
+    W:'10001/10001/10101/11011/10001', X:'10001/01010/00100/01010/10001',
+    Y:'10001/01010/00100/00100/00100', Z:'11111/00010/00100/01000/11111',
+    ' ':'00000/00000/00000/00000/00000'
+  };
+
+  var CHUNKS = 16;
+
+  /* Renders text the way run.sh does: glyph bitmaps at `scale`, vertical
+     sub-rows packed two-per-row into half-blocks, split into CHUNKS pieces
+     so each can be coloured (and revealed) independently. */
+  function renderWord(lines, scale) {
+    var cols = 0, l, i, len;
+
+    for (l = 0; l < lines.length; l++) {
+      len = lines[l].length;
+      cols = Math.max(cols, len * 5 * scale + (len - 1) * scale);
+    }
+
+    var sub = [];
+    for (l = 0; l < lines.length; l++) {
+      var text = lines[l];
+      var width = text.length * 5 * scale + (text.length - 1) * scale;
+      var left = Math.floor((cols - width) / 2);
+
+      for (var row = 0; row < 5; row++) {
+        var bits = new Array(left + 1).join('0');
+        for (i = 0; i < text.length; i++) {
+          var glyph = (FONT[text.charAt(i)] || FONT[' ']).split('/')[row];
+          for (var col = 0; col < 5; col++) {
+            var on = glyph.charAt(col);
+            for (var sx = 0; sx < scale; sx++) bits += on;
+          }
+          if (i < text.length - 1) {
+            for (var sg = 0; sg < scale; sg++) bits += '0';
+          }
+        }
+        while (bits.length < cols) bits += '0';
+        for (var sy = 0; sy < scale; sy++) sub.push(bits);
+      }
+      if (sub.length % 2) sub.push(new Array(cols + 1).join('0'));
+      if (l < lines.length - 1) {
+        sub.push(new Array(cols + 1).join('0'));
+        sub.push(new Array(cols + 1).join('0'));
+      }
+    }
+
+    var chunkWidth = Math.ceil(cols / CHUNKS);
+    var out = [];
+    for (var k = 0; k < sub.length; k += 2) {
+      var upper = sub[k], lower = sub[k + 1] || '';
+      var pieces = [], piece = '';
+      for (var c = 0; c < cols; c++) {
+        var u = upper.charAt(c) === '1';
+        var d = lower.charAt(c) === '1';
+        piece += u && d ? '█' : u ? '▀' : d ? '▄' : ' ';
+        if (piece.length === chunkWidth) { pieces.push(piece); piece = ''; }
+      }
+      if (piece) pieces.push(piece);
+      out.push(pieces);
+    }
+    return { rows: out, cols: cols };
+  }
+
+  function paintMark() {
+    var el = document.getElementById('mark');
+    if (!el) return;
+
+    var narrow = window.innerWidth < 620;
+    var art = renderWord(['LET IT', 'HAPPEN'], narrow ? 1 : 2);
+
+    var html = '';
+    for (var r = 0; r < art.rows.length; r++) {
+      var pieces = art.rows[r];
+      for (var c = 0; c < pieces.length; c++) {
+        var hue = (c * 15 + r * 7 + 18) % 360;
+        var delay = reduced ? 0 : 0.16 + c * 0.028;
+        html += '<i style="color:hsl(' + hue + ' 82% 66%);animation-delay:' +
+                delay.toFixed(3) + 's">' +
+                pieces[c].replace(/&/g, '&amp;').replace(/</g, '&lt;') +
+                '</i>';
+      }
+      html += '\n';
+    }
+    el.innerHTML = html;
+
+    // Size the type so the block letters always fit the column.
+    var avail = Math.min(el.parentNode.clientWidth, 900);
+    var size = Math.max(4, Math.min(18, avail / (art.cols * 0.62)));
+    el.style.fontSize = size.toFixed(2) + 'px';
+  }
+
+  /* ================================================================== *
+   * The radial spectrum bloom, ported from effects.awk. Bands wrap around
+   * a circle — bass down, treble up, mirrored left to right — beats push
+   * rings outward, and a starfield fills the gaps. Here the spectrum is
+   * synthetic instead of an ffmpeg analysis of the track.
+   * ================================================================== */
+
+  var canvas = document.getElementById('bloom');
+  var ctx = canvas.getContext('2d', { alpha: true });
+
+  var CHARS = [' ', '·', '░', '▒', '▓', '█'];
+  var BANDS = 16;
+  var PETALS = 180;
+
+  var cellW = 0, cellH = 0, gridW = 0, gridH = 0, fontPx = 0;
+  var RAD = null, HUE = null, BND = null, PET = null, NOISE = null;
+
+  var colourCache = Object.create(null);
+
+  function colourFor(hue, level) {
+    var key = ((hue % 360 + 360) % 360 / 3 | 0) * 8 + level;
+    var hit = colourCache[key];
+    if (hit) return hit;
+
+    var h = ((hue % 360) + 360) % 360;
+    var v = 0.35 + 0.13 * level;
+    var s = 0.72;
+    var c = v * s, seg = h / 60 | 0, off = h / 60 - seg;
+    var x = seg % 2 === 0 ? c * off : c * (1 - off);
+    var m = v - c, r, g, b;
+
+    if (seg === 0)      { r = c; g = x; b = 0; }
+    else if (seg === 1) { r = x; g = c; b = 0; }
+    else if (seg === 2) { r = 0; g = c; b = x; }
+    else if (seg === 3) { r = 0; g = x; b = c; }
+    else if (seg === 4) { r = x; g = 0; b = c; }
+    else                { r = c; g = 0; b = x; }
+
+    var out = 'rgb(' + ((r + m) * 255 | 0) + ',' + ((g + m) * 255 | 0) +
+              ',' + ((b + m) * 255 | 0) + ')';
+    colourCache[key] = out;
+    return out;
+  }
+
+  function noiseAt(x, y) {
+    var v = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+    return v - Math.floor(v);
+  }
+
+  function measure() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var w = window.innerWidth, h = window.innerHeight;
+
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    fontPx = w < 640 ? 12 : 15;
+    ctx.font = fontPx + 'px ' +
+      'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace';
+    ctx.textBaseline = 'top';
+
+    cellW = ctx.measureText('█').width || fontPx * 0.6;
+    cellH = Math.round(fontPx * 1.16);
+
+    gridW = Math.ceil(w / cellW) + 1;
+    gridH = Math.ceil(h / cellH) + 1;
+
+    buildGeometry();
+  }
+
+  /* Per-cell geometry is fixed until the viewport changes, exactly as in
+     the awk version — the frame loop is then just a lookup per cell. */
+  function buildGeometry() {
+    var n = gridW * gridH;
+    RAD = new Float32Array(n);
+    HUE = new Float32Array(n);
+    BND = new Uint8Array(n);
+    PET = new Uint16Array(n);
+    NOISE = new Float32Array(n);
+
+    var cx = (gridW - 1) / 2, cy = (gridH - 1) / 2;
+    var stretch = (cellH / cellW) * 0.92;
+
+    // Normalise by whichever edge is NEAREST, not by width. Dividing by
+    // width alone means that on a wide viewport the vertical extent never
+    // reaches r = 1, so every column stays inside the bloom and the left and
+    // right edges fill with solid blocks.
+    var maxR = Math.max(Math.min(gridW / 2, (gridH / 2) * stretch), 1);
+
+    for (var y = 0; y < gridH; y++) {
+      for (var x = 0; x < gridW; x++) {
+        var i = y * gridW + x;
+        var dx = x - cx;
+        // Character cells are taller than wide; stretch y so a circle reads
+        // as a circle.
+        var dy = (y - cy) * stretch;
+
+        RAD[i] = Math.sqrt(dx * dx + dy * dy) / maxR;
+
+        var a = Math.atan2(dy, dx) / (2 * Math.PI) + 0.5;
+        HUE[i] = a * 300;
+        PET[i] = (a * PETALS) | 0;
+
+        var spoke = a - 0.75;
+        if (spoke < -0.5) spoke += 1;
+        if (spoke < 0) spoke = -spoke;
+        BND[i] = (spoke * 2 * 15.999) | 0;
+
+        NOISE[i] = noiseAt(x + 1, y + 1);
+      }
+    }
+  }
+
+  /* A stand-in for the ffmpeg spectrum: a steady pulse with each band
+     wobbling at its own rate, so the shape never repeats exactly. */
+  var band = new Float32Array(BANDS);
+  var BPM = 118, BEAT_SECONDS = 60 / BPM;
+  var lastBeatIndex = -1;
+
+  function sampleSpectrum(t) {
+    var phase = (t % BEAT_SECONDS) / BEAT_SECONDS;
+    var kick = Math.pow(1 - phase, 3);
+
+    for (var i = 0; i < BANDS; i++) {
+      var f = i / (BANDS - 1);
+      var base = (1 - f) * 0.58 + 0.12;
+      var wob = 0.5 + 0.5 * Math.sin(t * (0.6 + f * 2.1) + i * 1.3);
+      var swell = 0.82 + 0.18 * Math.sin(t * 0.21 + f * 2.0);
+      // GAIN keeps the bloom to a shape on the page rather than a wash that
+      // fills the viewport — the real ffmpeg bands sit far lower than this
+      // synthetic pulse does before it is scaled.
+      var v = base * (0.44 + 0.56 * wob) * swell *
+              (1 + kick * (1 - f) * 0.75) * 0.62;
+      band[i] = v > 0.82 ? 0.82 : v;
+    }
+
+    var beatIndex = Math.floor(t / BEAT_SECONDS);
+    var isBeat = beatIndex !== lastBeatIndex;
+    lastBeatIndex = beatIndex;
+    return isBeat;
+  }
+
+  var rings = [];
+  var lastT = -1;
+  var RING_MAX = 1.15;
+
+  function drawFrame(t) {
+    var isBeat = sampleSpectrum(t);
+    var dt = lastT < 0 ? 0.033 : Math.min(t - lastT, 0.4);
+    lastT = t;
+
+    for (var i = rings.length - 1; i >= 0; i--) {
+      rings[i] += dt * 0.75;
+      if (rings[i] > RING_MAX) rings.splice(i, 1);
+    }
+    if (isBeat && rings.length < 6) rings.push(0.04);
+
+    var core = 0.09 + 0.13 * ((band[0] + band[1]) / 2);
+    var spin = t * 30;
+
+    var petalLut = new Float32Array(PETALS);
+    for (i = 0; i < PETALS; i++) {
+      petalLut[i] = 0.78 + 0.22 * Math.sin((i / PETALS) * 2 * Math.PI * 5 + t * 1.7);
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (var y = 0; y < gridH; y++) {
+      var rowBase = y * gridW;
+      var py = y * cellH;
+
+      // Accumulate same-coloured neighbours into one fillText, the same
+      // run-length trick the shell version uses to keep output small.
+      var runText = '', runColour = '', runStartX = 0;
+
+      for (var x = 0; x < gridW; x++) {
+        var idx = rowBase + x;
+        var r = RAD[idx];
+        var edge = core + 0.70 * band[BND[idx]] * petalLut[PET[idx]];
+
+        var level = 0, hue = 0;
+
+        if (r < edge) {
+          level = ((1 - r / edge) * 5.4 | 0) + 1;
+          if (level > 5) level = 5;
+          hue = HUE[idx] + spin + r * 150;
+        } else if (r < edge + 0.045) {
+          level = 1;
+          hue = HUE[idx] + spin + 40;
+        }
+
+        for (var k = 0; k < rings.length; k++) {
+          var d = Math.abs(r - rings[k]);
+          if (d < 0.03) {
+            var rl = ((1 - rings[k] / RING_MAX) * 5 | 0) + 1;
+            if (rl > 5) rl = 5;
+            if (rl > level) { level = rl; hue = spin * 2.2 + rings[k] * 300; }
+          }
+        }
+
+        if (level === 0) {
+          var nz = NOISE[idx];
+          if (nz > 0.9955 && Math.sin(t * 2.5 + nz * 100) > 0.1) {
+            level = 1;
+            hue = 210 + nz * 60;
+          }
+        }
+
+        var colour = level === 0 ? '' : colourFor(hue, level);
+
+        if (colour !== runColour) {
+          if (runText && runColour) {
+            ctx.fillStyle = runColour;
+            ctx.fillText(runText, runStartX * cellW, py);
+          }
+          runText = '';
+          runColour = colour;
+          runStartX = x;
+        }
+        runText += CHARS[level];
+      }
+
+      if (runText && runColour) {
+        ctx.fillStyle = runColour;
+        ctx.fillText(runText, runStartX * cellW, py);
+      }
+    }
+  }
+
+  /* Capped at 30fps: the bloom is atmosphere, not the main event, and this
+     keeps it off the critical path on laptops. */
+  var FRAME_MS = 1000 / 30;
+  var nextFrame = 0;
+  var started = 0;
+
+  function loop(now) {
+    if (!started) started = now;
+    if (now >= nextFrame) {
+      nextFrame = now + FRAME_MS;
+      drawFrame((now - started) / 1000);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  /* ================================================================== *
+   * Wiring
+   * ================================================================== */
+
+  var resizeTimer = 0;
+  function onResize() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      measure();
+      paintMark();
+      if (reduced) drawFrame(0);
+    }, 120);
+  }
+
+  measure();
+  paintMark();
+
+  if (reduced) {
+    drawFrame(0);
+  } else {
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('resize', onResize);
+
+  // Copy button
+  var COMMAND = 'curl -fsSL https://letithappen.alsaadii98.com/play.sh | bash';
+  var copyBtn = document.getElementById('copy');
+  var status = document.getElementById('status');
+  var revert = 0;
+
+  function flash(label, ok) {
+    copyBtn.textContent = label;
+    copyBtn.setAttribute('data-done', ok ? '1' : '0');
+    status.textContent = ok ? 'Command copied to clipboard' : 'Copy failed';
+    clearTimeout(revert);
+    revert = setTimeout(function () {
+      copyBtn.textContent = 'copy';
+      copyBtn.removeAttribute('data-done');
+      status.textContent = '';
+    }, 2000);
+  }
+
+  copyBtn.addEventListener('click', function () {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(COMMAND).then(
+        function () { flash('copied', true); },
+        function () { flash('select it', false); }
+      );
+      return;
+    }
+    // Fallback for non-secure contexts.
+    var ta = document.createElement('textarea');
+    ta.value = COMMAND;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    flash(ok ? 'copied' : 'select it', ok);
+  });
+})();
+</script>
+
+</body>
+</html>
